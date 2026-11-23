@@ -1,0 +1,148 @@
+# ============================================================
+# GenResearch — Report Store (C2)
+# Saves generated reports to Supabase instead of local files.
+# ============================================================
+import logging
+from database.supabase_client import get_supabase
+
+logger = logging.getLogger(__name__)
+
+
+def build_completion_guide_text(state: dict) -> str:
+    """Builds a markdown string for the completion guide based on state."""
+    topic = state.get("topic", "Research Paper")
+    sufficiency = state.get("sufficiency_report", {})
+    if not isinstance(sufficiency, dict):
+        sufficiency = {}
+    flags = state.get("flagged_items", [])
+    if not isinstance(flags, list):
+        flags = []
+    cv_res = state.get("citation_verification_result", {})
+    sc_res = state.get("section_critic_result", {})
+    qa_res = state.get("final_qa_result", {})
+    cv_res = cv_res if isinstance(cv_res, dict) else {}
+    sc_res = sc_res if isinstance(sc_res, dict) else {}
+    qa_res = qa_res if isinstance(qa_res, dict) else {}
+
+    lines = [
+        f"# Completion Guide: {topic}",
+        "",
+        "## 1. Sufficiency Analysis",
+        f"Overall Assessment: {sufficiency.get('overall_assessment', 'Unknown')}",
+        "",
+        "### Section Breakdown:"
+    ]
+
+    sufficiency_sections = sufficiency.get("sections", {})
+    if isinstance(sufficiency_sections, dict):
+        for section, data in sufficiency_sections.items():
+            if isinstance(data, dict):
+                confidence = data.get("confidence", "unknown")
+                reasoning = data.get("reasoning", "")
+            else:
+                confidence = data if isinstance(data, (str, int, float)) else "unknown"
+                reasoning = ""
+            lines.append(f"- **{section}** ({confidence}): {reasoning}")
+
+    generated_sections = state.get("generated_sections", [])
+    removed_claims = [
+        (section.get("section_name", "Section"), claim)
+        for section in generated_sections
+        if isinstance(section, dict)
+        for claim in (section.get("removed_claims") or [])
+    ]
+    under_evidenced = [
+        section.get("section_name", "Section")
+        for section in generated_sections
+        if isinstance(section, dict) and section.get("under_evidenced")
+    ]
+    if under_evidenced:
+        lines.extend(["", "## Under-evidenced Sections"])
+        lines.extend(f"- {name}: more than half of the section sentences required review." for name in under_evidenced)
+    if removed_claims:
+        lines.extend(["", "## Removed Unsupported Claims"])
+        lines.extend(f"- **{section}:** {claim}" for section, claim in removed_claims)
+
+    lines.append("")
+    lines.append("## 2. Action Items (Flags)")
+    if not flags:
+        lines.append("No flagged items! The pipeline ran smoothly.")
+    else:
+        for idx, flag in enumerate(flags, 1):
+            if not isinstance(flag, dict):
+                lines.append(f"### Issue {idx}")
+                lines.append(f"**Problem:** {flag}")
+                continue
+            lines.append(f"### Issue {idx} (from {flag.get('node')})")
+            lines.append(f"**Problem:** {flag.get('issue')}")
+            lines.append(f"**Action Required:** {flag.get('action_required')}")
+
+    lines.append("")
+    lines.append("## 3. Quality Metrics")
+    coverage_score = cv_res.get("coverage_score")
+    coverage_label = f"{coverage_score:.0%}" if isinstance(coverage_score, (int, float)) else "unknown"
+    lines.append(f"- **Citation Grounding:** {coverage_label} coverage")
+    writing_score = sc_res.get("overall_score")
+    qa_score = qa_res.get("overall_score")
+    writing_label = f"{writing_score:g}" if isinstance(writing_score, (int, float)) else "unknown"
+    qa_label = f"{qa_score:g}" if isinstance(qa_score, (int, float)) else "unknown"
+    lines.append(f"- **Writing Quality:** {writing_label}/10")
+    lines.append(f"- **Overall Pipeline QA:** {qa_label}/10")
+    lines.append("")
+    lines.append(f"**Final Summary:** {qa_res.get('summary', '')}")
+
+    evidence_visuals = state.get("evidence_visual_report", {})
+    if isinstance(evidence_visuals, dict) and evidence_visuals:
+        lines.extend(["", "## 4. Evidence & Visuals Audit"])
+        gaps = evidence_visuals.get("gap_report", [])
+        if gaps:
+            lines.extend(
+                f"- **{gap.get('section', 'Section')}** (priority {gap.get('priority', '?')}): "
+                f"{gap.get('claim', '')}"
+                for gap in gaps
+            )
+        else:
+            lines.append("No quantitative evidence gaps were detected.")
+        lines.extend(
+            f"- Warning: {warning}"
+            for warning in evidence_visuals.get("warnings", [])
+        )
+
+    return "\n".join(lines)
+
+
+def save_report_to_supabase(state: dict) -> str:
+    """
+    Save the completed pipeline results to Supabase `research_reports`.
+    Returns the ID of the inserted record.
+    """
+    sb = get_supabase()
+
+    session_id = state.get("session_id", "")
+    user_id = state.get("user_id", "")
+    topic = state.get("topic", "Unknown")
+    draft_text = state.get("draft_text", "")
+    outline = state.get("outline", {})
+    citation_registry = state.get("citation_registry", [])
+
+    completion_guide = build_completion_guide_text(state)
+
+    data = {
+        "session_id": session_id,
+        "user_id": user_id,
+        "topic": topic,
+        "draft_text": draft_text,
+        "completion_guide": completion_guide,
+        "outline": outline,
+        "citation_registry": citation_registry,
+    }
+
+    try:
+        # Using upsert on session_id to avoid duplicates if run multiple times
+        res = sb.table("research_reports").upsert(
+            data, on_conflict="session_id"
+        ).execute()
+        return res.data[0]["id"] if res.data else ""
+    except Exception as e:
+        logger.error(f"Failed to save report to Supabase: {e}")
+        return ""

@@ -1,0 +1,168 @@
+# ============================================================
+# GenResearch — ChromaDB Service
+# Store, retrieve, and delete paper chunks in ChromaDB
+# ============================================================
+import json
+
+from database.chroma_client import get_user_collection, get_session_collection
+from models.schemas import ChunkMetadata
+from services.embedder import embed_texts
+
+
+def _chroma_safe_metadata(meta: dict) -> dict:
+    """Convert structured metadata to Chroma-supported scalar values."""
+    safe: dict = {}
+    for key, value in meta.items():
+        if value is None:
+            continue
+        if isinstance(value, (list, dict)):
+            if not value:
+                continue
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                safe[key] = "; ".join(value)
+            else:
+                safe[key] = json.dumps(value, ensure_ascii=False)
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            safe[key] = value
+    return safe
+
+
+def _verify_chunks_stored(collection, chunk_ids: list[str], paper_id: str) -> None:
+    """Fail indexing if Chroma did not persist every chunk that was submitted."""
+    stored = collection.get(where={"paper_id": paper_id}, include=[])
+    stored_ids = set(stored.get("ids") or [])
+    missing_ids = set(chunk_ids) - stored_ids
+    if missing_ids:
+        raise RuntimeError(
+            f"ChromaDB did not persist {len(missing_ids)} of {len(chunk_ids)} chunks for paper {paper_id}."
+        )
+
+
+async def store_chunks(
+    user_id: str,
+    paper_id: str,
+    chunks: list[str],
+    title: str,
+    collection_name: str,
+    metadata: list[ChunkMetadata] | None = None,
+) -> int:
+    """
+    Embed and store text chunks in the user's ChromaDB collection.
+    Used by the legacy paper-upload pipeline (papers router).
+    Returns the number of chunks stored.
+    """
+    if not chunks:
+        return 0
+
+    # Generate embeddings for all chunks
+    embeddings = await embed_texts(chunks)
+
+    # Build IDs, documents, metadata, and embeddings lists
+    ids = [item.chunk_id for item in metadata] if metadata else [f"{paper_id}_chunk_{i}" for i in range(len(chunks))]
+    metadatas = [
+        _chroma_safe_metadata({
+            "paper_id": paper_id,
+            "user_id": user_id,
+            "chunk_index": i,
+            "title": title,
+            "collection": collection_name,
+            **(metadata[i].model_dump(exclude_none=True) if metadata else {}),
+        })
+        for i in range(len(chunks))
+    ]
+
+    # Upsert into ChromaDB
+    col = get_user_collection(user_id)
+    col.upsert(
+        ids=ids,
+        documents=chunks,
+        embeddings=embeddings,
+        metadatas=metadatas,
+    )
+    _verify_chunks_stored(col, ids, paper_id)
+
+    return len(chunks)
+
+
+async def store_structured_chunks(
+    user_id: str,
+    chunks: list[tuple[ChunkMetadata, str]],
+    collection_name: str,
+) -> int:
+    """Store provenance-aware chunks produced by ``ingestion.chunk_document``."""
+    if not chunks:
+        return 0
+    metadata, documents = zip(*chunks)
+    return await store_chunks(
+        user_id=user_id,
+        paper_id=metadata[0].paper_id,
+        chunks=list(documents),
+        title=metadata[0].title or "Unknown Document",
+        collection_name=collection_name,
+        metadata=list(metadata),
+    )
+
+
+async def store_chunks_session(
+    session_id: str,
+    source_id: str,
+    chunks: list[str],
+    title: str,
+    tag: str = "scraped",
+) -> int:
+    """
+    Embed and store text chunks in a session-scoped ChromaDB collection.
+    Used by the pipeline ingestion node — guarantees topic isolation.
+    Returns the number of chunks stored.
+    """
+    if not chunks:
+        return 0
+
+    embeddings = await embed_texts(chunks)
+
+    ids = [f"{source_id}_chunk_{i}" for i in range(len(chunks))]
+    metadatas = [
+        {
+            "source_id": source_id,
+            "session_id": session_id,
+            "chunk_index": i,
+            "title": title,
+            "tag": tag,
+        }
+        for i in range(len(chunks))
+    ]
+
+    col = get_session_collection(session_id)
+    col.upsert(
+        ids=ids,
+        documents=chunks,
+        embeddings=embeddings,
+        metadatas=metadatas,
+    )
+    stored = col.get(where={"source_id": source_id}, include=[])
+    stored_ids = set(stored.get("ids") or [])
+    missing_ids = set(ids) - stored_ids
+    if missing_ids:
+        raise RuntimeError(
+            f"ChromaDB did not persist {len(missing_ids)} of {len(ids)} chunks for source {source_id}."
+        )
+
+    return len(chunks)
+
+
+def delete_paper_chunks(user_id: str, paper_id: str) -> int:
+    """
+    Delete all chunks belonging to a paper from the user's collection.
+    Returns the number of chunks deleted.
+    """
+    col = get_user_collection(user_id)
+
+    # Find all chunk IDs for this paper
+    results = col.get(where={"paper_id": paper_id}, include=[])
+    chunk_ids = results.get("ids", [])
+
+    if chunk_ids:
+        col.delete(ids=chunk_ids)
+
+    return len(chunk_ids)

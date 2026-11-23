@@ -1,0 +1,112 @@
+# ============================================================
+# Node: Ingestion + Citation Registry (Stage 8)
+# Builds the citation registry and embeds sources into ChromaDB.
+# No LLM call — pure data processing.
+#
+# A6/B1: Uses session-scoped ChromaDB collections — chunks for
+#        one topic/session never surface in a different session.
+# ============================================================
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime
+
+from services.chroma_service import store_chunks_session
+from services.chunker import chunk_text
+
+logger = logging.getLogger(__name__)
+
+
+def _build_citation_id(index: int) -> str:
+    return f"CR-{index + 1:03d}"
+
+
+async def ingestion_node(state: dict) -> dict:
+    session_id = state.get("session_id", str(uuid.uuid4()))
+    quality_results = state.get("source_quality_results", {})
+
+    user_sources = state.get("user_provided_sources", [])
+    scraped_sources = state.get("scraped_sources", [])
+
+    # Filter scraped by quality eval
+    accepted_scraped = [
+        s for s in scraped_sources
+        if quality_results.get(s.get("title", ""), {}).get("passed", True)
+    ]
+
+    # Build citation registry — user sources first (priority)
+    citation_registry: list[dict] = []
+    all_accepted = []
+
+    for s in user_sources:
+        cid = _build_citation_id(len(citation_registry))
+        content = (s.get("content") or "").strip()
+        abstract = (s.get("abstract_snippet") or "").strip()
+        citation_registry.append({
+            "id": cid, "title": s.get("title", "User Document"),
+            "authors": s.get("authors", "Unknown"), "year": s.get("year"),
+            "url": s.get("url", ""), "doi": s.get("doi", ""),
+            "journal": s.get("journal", ""),
+            "volume": s.get("volume", ""),
+            "issue": s.get("issue", ""),
+            "pages": s.get("pages", ""),
+            "publisher": s.get("publisher", ""),
+            "publication_type": s.get("publication_type", ""),
+            "source_apis": s.get("source_apis", []),
+            "accessed_date": datetime.utcnow().isoformat(),
+            "tag": "user", "source_type": s.get("source_type", "uploaded"),
+            "abstract_snippet": abstract,
+            "evidence_level": "full_text" if content else "abstract" if abstract else "none",
+        })
+        all_accepted.append({**s, "tag": "user", "citation_id": cid})
+
+    for s in accepted_scraped:
+        cid = _build_citation_id(len(citation_registry))
+        content = (s.get("content") or "").strip()
+        abstract = (s.get("abstract_snippet") or "").strip()
+        citation_registry.append({
+            "id": cid, "title": s.get("title", "Unknown"),
+            "authors": s.get("authors", "Unknown"), "year": s.get("year"),
+            "url": s.get("url", ""), "doi": s.get("doi", ""),
+            "journal": s.get("journal", ""),
+            "volume": s.get("volume", ""),
+            "issue": s.get("issue", ""),
+            "pages": s.get("pages", ""),
+            "publisher": s.get("publisher", ""),
+            "publication_type": s.get("publication_type", ""),
+            "source_apis": s.get("source_apis", []),
+            "accessed_date": s.get("accessed_date", datetime.utcnow().isoformat()),
+            "tag": "scraped", "source_type": s.get("source_api", "web"),
+            "source_category": s.get("source_category", "general"),
+            "abstract_snippet": abstract,
+            "evidence_level": "full_text" if content else "abstract" if abstract else "none",
+        })
+        all_accepted.append({**s, "tag": "scraped", "citation_id": cid})
+
+    # Ingest into session-scoped ChromaDB collection (A6/B1).
+    # Prefer the full source text; the abstract snippet is only a short
+    # preview and should be used only when full content is unavailable.
+    total_chunks = 0
+    for source in all_accepted:
+        content = source.get("content", "") or source.get("abstract_snippet", "")
+        if not content:
+            continue
+        chunks = chunk_text(content)
+        if chunks:
+            num = await store_chunks_session(
+                session_id=session_id,
+                source_id=source.get("citation_id", str(uuid.uuid4())),
+                chunks=chunks,
+                title=source.get("title", "Unknown"),
+                tag=source.get("tag", "scraped"),
+            )
+            total_chunks += num
+
+    return {
+        "citation_registry": citation_registry,
+        "current_step": "ingestion",
+        "steps_log": [
+            f"✓ Registry: {len(citation_registry)} sources, {total_chunks} chunks embedded"
+        ],
+    }

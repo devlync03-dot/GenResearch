@@ -1,0 +1,400 @@
+from services.citation_formatting import (
+    build_reference_list,
+    format_apa_reference,
+    format_in_text_citation,
+    flag_unverified_freeform_citations,
+    flag_ungrounded_specifics,
+    normalize_registry_citation_ids,
+    _split_sentences,
+    collapse_duplicate_citation_markers,
+    resolve_and_append_references,
+    resolve_in_text_citations,
+    validate_release_gate,
+)
+
+REGISTRY = [
+    {
+        "id": "CR-001",
+        "title": "Efficient Transformers: A Survey",
+        "authors": "Tay, Y., Dehghani, M., Bahri, D.",
+        "year": 2022,
+        "doi": "10.1145/3530811",
+    },
+    {
+        "id": "CR-002",
+        "title": "Attention Is All You Need",
+        "authors": "Vaswani, A., Shazeer, N.",
+        "year": 2017,
+        "url": "https://arxiv.org/abs/1706.03762",
+    },
+    {
+        "id": "CR-003",
+        "title": "A Solo-Authored Paper",
+        "authors": "Kim, S.",
+        "year": 2019,
+        "url": "https://example.org/kim",
+    },
+    {
+        "id": "CR-004",
+        "title": "Untitled Origin Dataset Report",
+        "authors": "Unknown",
+        "year": None,
+        "url": "https://example.org/report",
+    },
+]
+
+
+def test_three_plus_authors_becomes_et_al():
+    assert format_in_text_citation(REGISTRY[0]) == "(Tay et al., 2022)"
+
+
+def test_two_authors_uses_ampersand():
+    assert format_in_text_citation(REGISTRY[1]) == "(Vaswani & Shazeer, 2017)"
+
+
+def test_single_author():
+    assert format_in_text_citation(REGISTRY[2]) == "(Kim, 2019)"
+
+
+def test_unknown_author_falls_back_to_title():
+    result = format_in_text_citation(REGISTRY[3])
+    assert "n.d." in result
+    assert "Untitled Origin Dataset Report" in result
+
+
+def test_author_units_with_periods_are_not_split_on_every_comma():
+    ref = format_apa_reference(REGISTRY[0])
+    assert ref.startswith("Tay, Y., Dehghani, M., & Bahri, D.")
+
+
+def test_resolve_in_text_citations_replaces_all_tags():
+    text = "Some claim [CR-001] and another [CR-002]."
+    resolved = resolve_in_text_citations(text, REGISTRY)
+    assert "[CR-001]" not in resolved
+    assert "[CR-002]" not in resolved
+    assert "(Tay et al., 2022)" in resolved
+    assert "(Vaswani & Shazeer, 2017)" in resolved
+
+
+def test_unknown_tag_does_not_invent_a_citation():
+    text = "A dangling reference [CR-999]."
+    resolved = resolve_in_text_citations(text, REGISTRY)
+    assert "(citation needed)" in resolved
+    assert "CR-999" not in resolved
+
+
+def test_reference_list_only_includes_cited_sources():
+    refs = build_reference_list(REGISTRY, used_ids={"CR-001"})
+    assert len(refs) == 1
+    assert "Efficient Transformers" in refs[0]
+
+
+def test_reference_list_is_alphabetized_by_surname():
+    used = {"CR-001", "CR-002", "CR-003"}
+    refs = build_reference_list(REGISTRY, used_ids=used)
+    surnames_order = [reference.split(",")[0] for reference in refs]
+    assert surnames_order == sorted(surnames_order, key=str.lower)
+
+
+def test_resolve_and_append_references_appends_only_cited_sources():
+    draft = "Intro text [CR-001]. Unused source CR-002 is never tagged here."
+    result = resolve_and_append_references(draft, REGISTRY)
+    assert "## References" in result
+    assert "Tay, Y." in result
+    assert "Vaswani" not in result
+
+
+def test_resolve_and_append_references_noop_when_nothing_cited():
+    draft = "No citations in this text at all."
+    result = resolve_and_append_references(draft, REGISTRY)
+    assert "## References" not in result
+    assert result == draft
+
+
+def test_resolve_and_append_references_flags_unverified_freeform_citations():
+    result = resolve_and_append_references(
+        "Claim (Davies et al., 2020) and verified claim [CR-001].", REGISTRY
+    )
+
+    assert "Davies" not in result
+    assert "[CITATION NEEDED]" in result
+    assert "(Tay et al., 2022)" in result
+
+
+def test_stable_source_tag_and_full_journal_reference_resolve():
+    source_id = "CR-012345ABCDEF"
+    entry = {
+        "id": source_id,
+        "title": "A Verifiable Study",
+        "authors": "Smith, J., Jones, A.",
+        "year": 2024,
+        "journal": "Journal of Applied Research",
+        "volume": "12",
+        "issue": "3",
+        "pages": "45-59",
+        "doi": "10.1234/example.2024.1",
+    }
+
+    result = resolve_and_append_references(f"Claim [{source_id}].", [entry])
+
+    assert "(Smith & Jones, 2024)" in result
+    assert "*Journal of Applied Research*, *12*(3), 45-59." in result
+    assert "https://doi.org/10.1234/example.2024.1" in result
+
+
+def test_extracted_full_names_are_formatted_as_apa_initials():
+    reference = format_apa_reference({
+        "title": "A Verifiable Study",
+        "authors": "Elin Roos, Axel Mie",
+        "year": 2018,
+    })
+
+    assert reference.startswith("Roos, E., & Mie, A. (2018).")
+
+
+def test_stable_source_tags_resolve_case_insensitively():
+    source_id = "CR-012345ABCDEF"
+    registry = [{"id": source_id, "title": "A Study", "authors": "Smith, J.", "year": 2024}]
+
+    assert "(Smith, 2024)" in resolve_in_text_citations("Claim [cr-012345abcdef].", registry)
+
+
+def test_bare_known_registry_ids_are_normalized_but_unknown_ids_are_not():
+    text = "Evidence from CR-003 and CR-007, but not CR-999 or [CR-003]."
+    registry = [*REGISTRY, {"id": "CR-007", "authors": "Jones, A.", "year": 2023}]
+
+    normalized = normalize_registry_citation_ids(text, registry)
+
+    assert normalized == "Evidence from [CR-003] and [CR-007], but not CR-999 or [CR-003]."
+    resolved = resolve_in_text_citations(normalized, registry)
+    assert "CR-003" not in resolved
+    assert "CR-007" not in resolved
+    assert "CR-999" in resolved
+
+
+def test_known_citation_ids_with_missing_brackets_are_normalized():
+    text = "The recommendation is supported [CR-003 and also CR-003]."
+
+    normalized = normalize_registry_citation_ids(text, REGISTRY)
+    resolved = resolve_in_text_citations(normalized, REGISTRY)
+
+    assert normalized == "The recommendation is supported [CR-003] and also [CR-003]."
+    assert "CR-003" not in resolved
+    assert "(Kim, 2019)" in resolved
+
+
+def test_release_gate_counts_source_ids_when_author_years_collide():
+    registry = [
+        {"id": "CR-101", "authors": "Smith, J.", "year": 2024, "evidence_level": "abstract"},
+        {"id": "CR-102", "authors": "Smith, J.", "year": 2024, "evidence_level": "abstract"},
+        {"id": "CR-103", "authors": "Jones, A.", "year": 2023, "evidence_level": "abstract"},
+    ]
+    final_text = "## Introduction\nEvidence (Smith, 2024) and (Jones, 2023).\n\n## References\nReferences."
+
+    passed, errors, metrics = validate_release_gate(
+        final_text,
+        registry,
+        sections=[{"text": "Evidence (Smith, 2024) and (Jones, 2023)."}],
+        min_sources=3,
+        cited_source_ids={"CR-101", "CR-102", "CR-103"},
+    )
+
+    assert passed
+    assert not errors
+    assert metrics["unique_sources"] == 3
+
+
+def test_release_gate_still_blocks_when_only_two_source_ids_were_cited():
+    registry = [
+        {"id": "CR-101", "authors": "Smith, J.", "year": 2024, "evidence_level": "abstract"},
+        {"id": "CR-102", "authors": "Jones, A.", "year": 2023, "evidence_level": "abstract"},
+    ]
+    final_text = "## Introduction\nEvidence (Smith, 2024) and (Jones, 2023).\n\n## References\nReferences."
+
+    passed, errors, metrics = validate_release_gate(
+        final_text,
+        registry,
+        sections=[{"text": "Evidence (Smith, 2024) and (Jones, 2023)."}],
+        min_sources=3,
+        cited_source_ids={"CR-101", "CR-102"},
+    )
+
+    assert not passed
+    assert any("2 found, minimum 3" in error for error in errors)
+    assert metrics["unique_sources"] == 2
+
+
+def test_common_citation_placeholders_are_flagged():
+    from services.citation_formatting import flag_placeholder_template_syntax
+
+    result = flag_placeholder_template_syntax(
+        "Intro [citation] and synthesis (Author, Year); conclusion [CR-00X]."
+    )
+
+    assert result.count("[CITATION NEEDED]") == 3
+    assert "[citation]" not in result
+    assert "[CR-00X]" not in result
+
+
+def test_grounding_gate_allows_supported_specifics_and_flags_invented_case_details():
+    evidence = {
+        "CR-001": "The study by Insilico Medicine evaluated ISM001 in 2021 and reported 60 percent improvement."
+    }
+    grounded = flag_ungrounded_specifics(
+        "Insilico Medicine evaluated ISM001 in 2021 and reported 60 percent improvement [CR-001].",
+        evidence,
+        {"CR-001"},
+        topic="AI drug discovery",
+    )
+    invented = flag_ungrounded_specifics(
+        "Insilico Medicine evaluated ISM002 in 2022 and reported 92% improvement [CR-001].",
+        evidence,
+        {"CR-001"},
+        topic="AI drug discovery",
+    )
+
+    assert "[CITATION NEEDED]" not in grounded
+    assert "[CITATION NEEDED]" in invented
+
+
+def test_grounding_gate_flags_percent_format_mismatch_for_review():
+    result = flag_ungrounded_specifics(
+        "The study reported 92% improvement [CR-001].",
+        {"CR-001": "The study reported 92 percent improvement."},
+        {"CR-001"},
+    )
+
+    assert "[CITATION NEEDED]" in result
+
+
+def test_sources_without_evidence_are_not_resolved_or_listed():
+    registry = [{"id": "CR-001", "title": "Empty source", "evidence_level": "none"}]
+
+    resolved = resolve_and_append_references("Claim [CR-001].", registry)
+
+    assert "(citation needed)" in resolved
+    assert "Empty source" not in resolved
+
+
+def test_sentence_splitter_preserves_et_al_and_other_abbreviations():
+    parts = _split_sentences(
+        "Smith et al. demonstrated X. This is also common in the U.S. today."
+    )
+
+    assert parts == [
+        "Smith et al. demonstrated X.",
+        "This is also common in the U.S. today.",
+    ]
+
+
+def test_citing_author_phrase_does_not_trigger_entity_gate():
+    result = flag_ungrounded_specifics(
+        "Smith et al. demonstrated this in skin cancer detection [CR-001].",
+        {"CR-001": "A study on dermatology image classification using convolutional networks."},
+        {"CR-001"},
+        topic="AI in medicine",
+    )
+
+    assert "[CITATION NEEDED]" not in result
+
+
+def test_unsupported_numbers_remain_flagged_with_valid_citation():
+    result = flag_ungrounded_specifics(
+        "The study reported 92% improvement [CR-001].",
+        {"CR-001": "The study reported 60 percent improvement."},
+        {"CR-001"},
+    )
+
+    assert "[CITATION NEEDED]" in result
+
+
+def test_duplicate_citation_needed_markers_collapse():
+    spam = "Claim [CITATION NEEDED] [CITATION NEEDED] [CITATION NEEDED]."
+
+    assert collapse_duplicate_citation_markers(spam) == "Claim [CITATION NEEDED]."
+    assert collapse_duplicate_citation_markers("Claim [CITATION NEEDED].") == "Claim [CITATION NEEDED]."
+
+
+def test_reference_resolution_collapses_duplicate_markers():
+    resolved = resolve_and_append_references(
+        "Claim [CITATION NEEDED] [CITATION NEEDED].", citation_registry=[]
+    )
+
+    assert resolved == "Claim [CITATION NEEDED]."
+
+
+def test_grounding_marker_is_inserted_before_terminal_period():
+    result = flag_ungrounded_specifics(
+        "A general statement without a citation.", {}, set()
+    )
+
+    assert result == "A general statement without a citation [CITATION NEEDED]."
+
+
+def test_et_al_author_attribution_is_not_flagged_as_an_entity():
+    result = flag_ungrounded_specifics(
+        "Smith et al. demonstrated this in skin cancer detection [CR-001].",
+        {"CR-001": "A dermatology image-classification study."},
+        {"CR-001"},
+        topic="AI in medicine",
+    )
+
+    assert "[CITATION NEEDED]" not in result
+
+
+def test_freeform_citation_at_sentence_start_gets_marker_at_sentence_end():
+    freeform = flag_unverified_freeform_citations(
+        "(Davies et al., 2020) reported an outcome."
+    )
+    result = flag_ungrounded_specifics(freeform, {}, set())
+
+    assert not result.startswith("[CITATION NEEDED]")
+    assert result.endswith("[CITATION NEEDED].")
+
+
+# ── Bug 1 regression: citations must survive when evidence_by_source is empty ─
+
+def test_cited_sentence_preserved_when_evidence_not_retrieved():
+    """A sentence with a valid [CR-###] tag must NOT be flagged as [CITATION NEEDED]
+    just because evidence_by_source is empty (retrieval returned nothing).
+    Previously the entity check fired on every number/capitalized word when
+    evidence was empty, causing all cited sentences to get flagged."""
+    result = flag_ungrounded_specifics(
+        "These models achieved 94% accuracy [CR-001].",
+        evidence_by_source={},
+        valid_source_ids={"CR-001"},
+        topic="machine learning",
+    )
+    assert "[CITATION NEEDED]" not in result, (
+        "Sentence with valid [CR-001] was incorrectly flagged when evidence was empty."
+    )
+
+
+def test_uncited_sentence_still_flagged_when_evidence_empty():
+    """Sentences with NO [CR-###] tag should still be flagged even when
+    evidence_by_source is empty."""
+    result = flag_ungrounded_specifics(
+        "These models achieved 94% accuracy.",
+        evidence_by_source={},
+        valid_source_ids={"CR-001"},
+        topic="machine learning",
+    )
+    assert "[CITATION NEEDED]" in result
+
+
+def test_multiple_cited_sentences_survive_empty_evidence():
+    """All cited sentences are preserved when evidence is absent."""
+    text = (
+        "Model A scored 0.92 F1 [CR-001]. "
+        "Model B used 10,000 training examples [CR-002]. "
+        "No citation here."
+    )
+    result = flag_ungrounded_specifics(
+        text,
+        evidence_by_source={},
+        valid_source_ids={"CR-001", "CR-002"},
+        topic="NLP benchmarks",
+    )
+    assert "[CR-001]" in result
+    assert "[CR-002]" in result
+    assert "No citation here [CITATION NEEDED]" in result
