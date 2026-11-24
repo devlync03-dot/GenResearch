@@ -24,6 +24,7 @@ from services.agents.nodes.context_build import context_build_node, _select_rele
 from services.agents.nodes.draft import _strip_duplicate_leading_heading
 from services.agents.prompts.draft import DRAFT_SYSTEM
 from services.citation_formatting import flag_placeholder_template_syntax, resolve_and_append_references
+from services.markdown_formatting import normalize_markdown_heading_lines
 
 
 # ---- Fix 1: placeholder bracket syntax ----
@@ -81,6 +82,34 @@ def test_leaves_genuine_content_untouched():
     generated = "AI has transformed medical science in several ways."
     result = _strip_duplicate_leading_heading(generated, "Introduction")
     assert result == generated
+
+
+def test_moves_inline_subheading_to_a_separate_markdown_line():
+    generated = (
+        "Security analyses frame the domain proactively. ## Problem statement\n\n"
+        "The security consequences are concrete."
+    )
+
+    assert normalize_markdown_heading_lines(generated) == (
+        "Security analyses frame the domain proactively.\n\n"
+        "## Problem statement\n\n"
+        "The security consequences are concrete."
+    )
+
+
+def test_separates_inline_and_consecutive_headings():
+    generated = (
+        "Text before. ## Evidence-based gap\n"
+        "## Aim and objectives\n"
+        "Text after."
+    )
+
+    assert normalize_markdown_heading_lines(generated) == (
+        "Text before.\n\n"
+        "## Evidence-based gap\n\n"
+        "## Aim and objectives\n\n"
+        "Text after."
+    )
 
 
 # ---- Fix 3: fabricated specific entities ----

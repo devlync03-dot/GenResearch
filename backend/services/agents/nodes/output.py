@@ -11,6 +11,7 @@ from pathlib import Path
 from services.report_store import save_report_to_supabase
 from models.schemas import ProposalOutput, GeneratedSection
 from services.agents.assembly_agent import assemble_docx
+from services.markdown_formatting import normalize_markdown_heading_lines
 from services.citation_formatting import (
     CITATION_TAG,
     build_reference_list,
@@ -93,7 +94,7 @@ async def output_node(state: dict) -> dict:
     )
     clean_draft, draft_extracted_claims = clean_citation_needed_markers(resolved_draft)
     review_list.extend(draft_extracted_claims)
-    resolved_draft = clean_draft
+    resolved_draft = normalize_markdown_heading_lines(clean_draft)
     review_list = list(dict.fromkeys(review_list))
 
     # Phase 3: Fail the run if any CR- string remains in the output

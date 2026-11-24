@@ -1,4 +1,13 @@
-from services.pdf_renderer import render_markdown_to_pdf
+from services.pdf_renderer import APAPDFRenderer, render_markdown_to_pdf
+
+
+def test_heading_has_one_body_line_of_space_above_and_below():
+    pdf = APAPDFRenderer(title="Spacing test", double_spaced=False)
+    start_y = pdf.get_y()
+
+    pdf.write_heading("Introduction", level=2)
+
+    assert pdf.get_y() - start_y >= 3 * pdf.line_h - 1e-6
 
 
 def test_pdf_renderer_handles_markdown_lists_and_citations():
@@ -20,3 +29,23 @@ def test_pdf_renderer_handles_markdown_lists_and_citations():
     )
 
     assert pdf.startswith(b"%PDF-")
+
+
+def test_pdf_renderer_separates_inline_and_consecutive_headings(monkeypatch):
+    headings = []
+    original_write_heading = APAPDFRenderer.write_heading
+
+    def record_heading(self, text, level):
+        headings.append(text)
+        original_write_heading(self, text, level)
+
+    monkeypatch.setattr(APAPDFRenderer, "write_heading", record_heading)
+
+    pdf = render_markdown_to_pdf(
+        "Text before. ## Evidence-based gap\n"
+        "## Aim and objectives\n"
+        "Text after."
+    )
+
+    assert pdf.startswith(b"%PDF-")
+    assert headings == ["Evidence-based gap", "Aim and objectives"]

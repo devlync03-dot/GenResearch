@@ -10,6 +10,7 @@ import re
 from fpdf import FPDF
 
 from services.citation_formatting import resolve_and_append_references
+from services.markdown_formatting import normalize_markdown_heading_lines
 
 FONT = "times"
 BODY_PT = 12
@@ -81,7 +82,7 @@ class APAPDFRenderer(FPDF):
         self.multi_cell(0, self.line_h, self.doc_title, align="C")
 
     def write_heading(self, text: str, level: int):
-        self.ln(self.line_h * 0.4)
+        self.ln(self.line_h)
         if level <= 1:
             self.set_font(FONT, "B", BODY_PT)
             self.multi_cell(0, self.line_h, text, align="C")
@@ -92,6 +93,7 @@ class APAPDFRenderer(FPDF):
             self.set_font(FONT, "BI", BODY_PT)
             self.multi_cell(0, self.line_h, text, align="L")
         self.set_font(FONT, size=BODY_PT)
+        self.ln(self.line_h)
 
     def write_paragraph(self, text: str):
         """Write a ragged-right paragraph with an APA first-line indent."""
@@ -165,6 +167,7 @@ def render_markdown_to_pdf(
     markdown_text = _strip_figure_placeholders(markdown_text)
     if citation_registry:
         markdown_text = resolve_and_append_references(markdown_text, citation_registry)
+    markdown_text = normalize_markdown_heading_lines(markdown_text)
     # Draft text and registry metadata can contain Unicode punctuation that
     # the built-in Times core font cannot encode (for example, an en dash).
     markdown_text = _normalize_pdf_text(markdown_text)

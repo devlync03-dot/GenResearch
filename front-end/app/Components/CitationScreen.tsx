@@ -102,6 +102,10 @@ interface EvidenceCandidate extends CitationSource {
   note?: string;
 }
 
+function evidenceCandidateKey(candidate: EvidenceCandidate, index: number) {
+  return `${candidate.id}:${candidate.page ?? ""}:${index}`;
+}
+
 interface WriteCheckResult {
   status?: string;
   verdict?: string;
@@ -912,8 +916,8 @@ export default function CitationScreen({ onBack }: { onBack: () => void }) {
                 {candidates.length > 0 && (
                   <div style={{ marginTop: 12, paddingLeft: 12, borderLeft: `2px solid ${C.borderGold}` }}>
                     <h3 style={{ ...sectionLabel, marginBottom: 8 }}>Ranked evidence candidates</h3>
-                    {candidates.map(candidate => (
-                      <div key={candidate.id} style={{ borderTop: `1px solid ${C.border}`, padding: "10px 0" }}>
+                    {candidates.map((candidate, index) => (
+                      <div key={evidenceCandidateKey(candidate, index)} style={{ borderTop: `1px solid ${C.border}`, padding: "10px 0" }}>
                         <strong style={{ ...bodyText, color: C.inkDark, fontSize: 12 }}>
                           {candidate.title}{candidate.year ? ` (${candidate.year})` : ""}
                         </strong>
@@ -949,7 +953,7 @@ export default function CitationScreen({ onBack }: { onBack: () => void }) {
                               void decideAuditEvidence(claim, candidate, "rejected");
                               setSearchResults(previous => ({
                                 ...previous,
-                                [claim.claim_id]: (previous[claim.claim_id] || []).filter(item => item.id !== candidate.id),
+                                [claim.claim_id]: (previous[claim.claim_id] || []).filter(item => item !== candidate),
                               }));
                             }}
                           >
@@ -1078,8 +1082,8 @@ export default function CitationScreen({ onBack }: { onBack: () => void }) {
                 No evidence candidates yet. Choose “Find evidence” to search indexed library papers.
               </p>
             )}
-            {(searchResults[activeClaim.claim_id] || []).map(candidate => (
-              <article key={candidate.id} style={{ border: `1px solid ${C.border}`, borderRadius: 4, padding: 14, marginTop: 10, background: C.white }}>
+            {(searchResults[activeClaim.claim_id] || []).map((candidate, index) => (
+              <article key={evidenceCandidateKey(candidate, index)} style={{ border: `1px solid ${C.border}`, borderRadius: 4, padding: 14, marginTop: 10, background: C.white }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
                   <div>
                     <h4 style={{ ...headingStyle, fontSize: 16 }}>{candidate.title}{candidate.year ? ` (${candidate.year})` : ""}</h4>
@@ -1182,8 +1186,8 @@ export default function CitationScreen({ onBack }: { onBack: () => void }) {
                 {writeResult.source?.title && <div>— {writeResult.source.title}{writeResult.source.year ? ` (${writeResult.source.year})` : ""}</div>}
               </blockquote>
             )}
-            {(writeResult.candidates || writeResult.suggested_sources || []).map(candidate => (
-              <div key={candidate.id} style={{ borderTop: `1px solid ${C.border}`, padding: "10px 0" }}>
+            {(writeResult.candidates || writeResult.suggested_sources || []).map((candidate, index) => (
+              <div key={evidenceCandidateKey(candidate, index)} style={{ borderTop: `1px solid ${C.border}`, padding: "10px 0" }}>
                 <strong style={{ ...bodyText, fontSize: 12 }}>{candidate.title}{candidate.year ? ` (${candidate.year})` : ""}</strong>
                 <span style={{ ...bodyText, fontSize: 11 }}> · {candidate.support_score}% · {candidate.support_level.replace(/_/g, " ")} · {candidate.evidence_level.replace(/_/g, " ")}</span>
                 {(candidate.metadata_verification || candidate.retraction_status) && (

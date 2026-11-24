@@ -18,6 +18,7 @@ from models.schemas import GeneratedSection
 from services.citation_formatting import (
     flag_unverified_freeform_citations,
 )
+from services.markdown_formatting import normalize_markdown_heading_lines
 from services.agents.nodes.context_build import context_build_node
 from services.agents.verification_agent import verify_section
 from services.agents.progress import emit_progress
@@ -205,7 +206,9 @@ async def draft_node(state: dict) -> dict:
                 reasoning_effort="none",
             )
 
-            generated = flag_unverified_freeform_citations(generated.strip())
+            generated = flag_unverified_freeform_citations(
+                normalize_markdown_heading_lines(generated.strip())
+            )
             generated = _strip_duplicate_leading_heading(generated, section_name)
             verified_section = await verify_section(
                 GeneratedSection(
@@ -227,7 +230,7 @@ async def draft_node(state: dict) -> dict:
                 f"✓ Completed section {section_idx}/{total_sections}: {section_name}",
             )
 
-        draft = "\n\n".join(draft_sections)
+        draft = normalize_markdown_heading_lines("\n\n".join(draft_sections))
         flagged_items = [
             {
                 "node": "draft",
@@ -276,7 +279,7 @@ async def draft_node(state: dict) -> dict:
         ),
         reasoning_effort="none",
     )
-    draft = flag_unverified_freeform_citations(draft)
+    draft = flag_unverified_freeform_citations(normalize_markdown_heading_lines(draft))
     evidence_by_source: dict[str, str] = {}
     for chunk in fallback_chunks:
         source_id = chunk.get("source_id")
@@ -290,7 +293,7 @@ async def draft_node(state: dict) -> dict:
         session_id,
         topic=topic,
     )
-    draft = verified.text
+    draft = normalize_markdown_heading_lines(verified.text)
 
     return {
         "draft_text": draft,
