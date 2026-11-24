@@ -9,6 +9,8 @@ import { API_BASE } from "../../lib/api";
 interface UploadedFile {
   id: string;
   name: string;
+  title: string;
+  authors: string;
   size: string;
   pages: number;
   status: "indexed" | "processing" | "unread" | "failed";
@@ -57,6 +59,8 @@ export default function UploadPapers() {
   const recentUploads: UploadedFile[] = dbPapers.slice(0, 8).map(p => ({
     id: p.id,
     name: p.file_name || p.title,
+    title: p.title,
+    authors: p.authors,
     size: p.file_size,
     pages: p.pages,
     status: p.status,
@@ -341,7 +345,14 @@ export default function UploadPapers() {
                 fontFamily: "'Crimson Pro', Georgia, serif",
                 fontSize: 13.5, color: C.inkDark, fontWeight: 500,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-              }}>{f.name}</span>
+              }}>
+                {f.name}
+                {f.title && f.title !== f.name && (
+                  <small style={{ display: "block", color: C.inkLight }}>
+                    {f.title}{f.authors ? ` · ${f.authors}` : ""}
+                  </small>
+                )}
+              </span>
               <span style={{ ...bodyText, fontSize: 12.5 }}>{f.size}</span>
               <span style={{ ...bodyText, fontSize: 12.5 }}>{f.pages}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

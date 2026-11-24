@@ -17,6 +17,7 @@ from services.pdf_extractor import extract_text_from_pdf, get_pdf_page_count
 from services.chunker import chunk_text
 from services.chroma_service import store_chunks, store_structured_chunks, delete_paper_chunks
 from services.embedder import OllamaEmbeddingError
+from services.pdf_metadata import extract_pdf_metadata
 from ingestion import chunk_document, parse_pdf
 from ingestion.pdf_parser import ParsedBlock
 from ingestion.table_extractor import extract_tables
@@ -170,8 +171,11 @@ async def upload_paper(
 
     file_bytes = await file.read()
     file_size = _format_file_size(len(file_bytes))
+    pdf_metadata = await asyncio.to_thread(extract_pdf_metadata, file_bytes)
     paper_id = str(uuid.uuid4())
-    paper_title = title or file.filename.rsplit(".", 1)[0]
+    paper_title = pdf_metadata["title"] or title or file.filename.rsplit(".", 1)[0]
+    paper_authors = authors or pdf_metadata["authors"]
+    paper_year = year or pdf_metadata["year"]
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
     sb = get_supabase()
@@ -186,8 +190,13 @@ async def upload_paper(
             "id": paper_id,
             "user_id": user_id,
             "title": paper_title,
-            "authors": authors,
-            "year": year,
+            "authors": paper_authors,
+            "year": paper_year,
+            "abstract": pdf_metadata["abstract"],
+            "doi": pdf_metadata["doi"],
+            "keywords": pdf_metadata["keywords"],
+            "subject": pdf_metadata["subject"],
+            "pdf_metadata": pdf_metadata["pdf_metadata"],
             "file_name": file.filename,
             "file_size": file_size,
             "tags": tag_list,
@@ -220,6 +229,8 @@ async def upload_paper(
         return {
             "paper_id": paper_id,
             "title": paper_title,
+            "authors": paper_authors,
+            "year": paper_year,
             "file_name": file.filename,
             "file_size": file_size,
             "pages": pages,
@@ -280,8 +291,11 @@ async def upload_batch(
                 continue
 
             file_size = _format_file_size(len(file_bytes))
+            pdf_metadata = await asyncio.to_thread(extract_pdf_metadata, file_bytes)
             paper_id = str(uuid.uuid4())
-            paper_title = (file.filename or "Untitled").rsplit(".", 1)[0]
+            paper_title = pdf_metadata["title"] or (file.filename or "Untitled").rsplit(".", 1)[0]
+            paper_authors = authors or pdf_metadata["authors"]
+            paper_year = year or pdf_metadata["year"]
             tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
             collection_name = collection.strip() or "Library"
 
@@ -291,8 +305,13 @@ async def upload_batch(
                 "id": paper_id,
                 "user_id": user_id,
                 "title": paper_title,
-                "authors": authors,
-                "year": year,
+                "authors": paper_authors,
+                "year": paper_year,
+                "abstract": pdf_metadata["abstract"],
+                "doi": pdf_metadata["doi"],
+                "keywords": pdf_metadata["keywords"],
+                "subject": pdf_metadata["subject"],
+                "pdf_metadata": pdf_metadata["pdf_metadata"],
                 "file_name": file.filename,
                 "file_size": file_size,
                 "tags": tag_list,
@@ -316,6 +335,9 @@ async def upload_batch(
 
             results.append({
                 "paper_id": paper_id,
+                "title": paper_title,
+                "authors": paper_authors,
+                "year": paper_year,
                 "file_name": file.filename,
                 "file_size": file_size,
                 "pages": pages,
@@ -392,17 +414,28 @@ async def retry_index_paper(paper_id: str, user_id: str):
     if not claim.data:
         raise HTTPException(status_code=409, detail="This paper is already being retried.")
     try:
+        file_bytes = await asyncio.to_thread(Path(storage_path).read_bytes)
+        pdf_metadata = await asyncio.to_thread(extract_pdf_metadata, file_bytes)
+        paper_title = pdf_metadata["title"] or paper.get("title") or "Untitled"
         pages, num_chunks = await _index_pdf(
             user_id,
             paper_id,
-            paper.get("title") or "Untitled",
+            paper_title,
             paper.get("collection") or "Library",
-            await asyncio.to_thread(Path(storage_path).read_bytes),
+            file_bytes,
         )
         await _execute_query(sb.table("papers").update({
             "status": "indexed",
             "chunks": num_chunks,
             "pages": pages,
+            "title": paper_title,
+            "authors": paper.get("authors") or pdf_metadata["authors"],
+            "year": paper.get("year") or pdf_metadata["year"],
+            "abstract": pdf_metadata["abstract"],
+            "doi": pdf_metadata["doi"],
+            "keywords": pdf_metadata["keywords"],
+            "subject": pdf_metadata["subject"],
+            "pdf_metadata": pdf_metadata["pdf_metadata"],
         }).eq("id", paper_id))
         return {
             "paper_id": paper_id,

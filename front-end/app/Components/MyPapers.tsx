@@ -6,7 +6,8 @@ import { getCurrentUserId, subscribeToPapers, type Paper as DBPaper } from "../.
 import { API_BASE } from "../../lib/api";
 
 interface Paper {
-  id: string; title: string; authors: string; year: number;
+  id: string; title: string; authors: string; year: number | null;
+  abstract: string; doi: string | null; keywords: string[]; subject: string;
   pages: number; tags: string[]; status: "indexed" | "processing" | "unread" | "failed"; addedDate: string;
 }
 
@@ -35,10 +36,28 @@ function PaperCard({ paper }: { paper: Paper }) {
     <div onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} style={{ ...cardBase, padding: "22px", background: hov ? C.white : C.creamLight, borderColor: hov ? C.borderGold : C.border, transform: hov ? "translateY(-3px)" : "none", boxShadow: hov ? `0 8px 24px ${C.shadow}` : "none", cursor: "pointer" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <StatusBadge status={paper.status} />
-        <span style={{ ...bodyText, fontSize: 12 }}>{paper.year}</span>
+        <span style={{ ...bodyText, fontSize: 12 }}>{paper.year ?? "Year unavailable"}</span>
       </div>
       <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 15, fontWeight: 700, color: C.inkDark, lineHeight: 1.3, marginBottom: 8, minHeight: 40 }}>{paper.title}</div>
       <div style={{ ...bodyText, fontSize: 12.5, marginBottom: 8 }}>{paper.authors}</div>
+      {(paper.abstract || paper.doi || paper.subject || paper.keywords.length > 0) && (
+        <details style={{ ...bodyText, fontSize: 12, marginBottom: 10 }}>
+          <summary style={{ cursor: "pointer", color: C.gold }}>Paper details</summary>
+          <div style={{ marginTop: 8 }}>
+            {paper.abstract && <p style={{ marginBottom: 8 }}>{paper.abstract}</p>}
+            {paper.subject && <p style={{ marginBottom: 6 }}><strong>Subject:</strong> {paper.subject}</p>}
+            {paper.doi && (
+              <p style={{ marginBottom: 6 }}>
+                <strong>DOI:</strong>{" "}
+                <a href={`https://doi.org/${encodeURIComponent(paper.doi)}`} target="_blank" rel="noreferrer">
+                  {paper.doi}
+                </a>
+              </p>
+            )}
+            {paper.keywords.length > 0 && <p><strong>Keywords:</strong> {paper.keywords.join(", ")}</p>}
+          </div>
+        </details>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
         <span style={{ ...bodyText, fontSize: 12 }}>{paper.pages} pages</span>
         <span style={{ ...bodyText, fontSize: 11 }}>{paper.addedDate}</span>
@@ -87,7 +106,11 @@ export default function MyPapers() {
     id: p.id,
     title: p.title,
     authors: p.authors,
-    year: p.year || 0,
+    year: p.year,
+    abstract: p.abstract ?? "",
+    doi: p.doi,
+    keywords: p.keywords ?? [],
+    subject: p.subject ?? "",
     pages: p.pages,
     tags: p.tags,
     status: p.status,
@@ -99,7 +122,7 @@ export default function MyPapers() {
   const filtered = papers.filter(p => {
     const q = search.toLowerCase();
     return (!q || p.title.toLowerCase().includes(q) || p.authors.toLowerCase().includes(q)) && (!activeTag || p.tags.includes(activeTag));
-  }).sort((a, b) => sortBy === "title" ? a.title.localeCompare(b.title) : sortBy === "year" ? b.year - a.year : 0);
+  }).sort((a, b) => sortBy === "title" ? a.title.localeCompare(b.title) : sortBy === "year" ? (b.year ?? 0) - (a.year ?? 0) : 0);
 
   return (
     <>

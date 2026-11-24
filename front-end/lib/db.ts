@@ -23,6 +23,11 @@ export interface Paper {
   title: string;
   authors: string;
   year: number | null;
+  abstract: string;
+  doi: string | null;
+  keywords: string[];
+  subject: string;
+  pdf_metadata: Record<string, string | number | boolean>;
   pages: number;
   file_size: string;
   file_name: string;

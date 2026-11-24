@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS public.papers (
     title text NOT NULL,
     authors text NOT NULL DEFAULT '',
     year integer,
+    abstract text NOT NULL DEFAULT '',
+    doi text,
+    keywords text[] NOT NULL DEFAULT '{}',
+    subject text NOT NULL DEFAULT '',
+    pdf_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     pages integer NOT NULL DEFAULT 0,
     file_size text NOT NULL DEFAULT '',
     file_name text NOT NULL DEFAULT '',
@@ -70,6 +75,11 @@ ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS user_id uuid DEFAULT auth.uid
 ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS title text NOT NULL DEFAULT '';
 ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS authors text NOT NULL DEFAULT '';
 ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS year integer;
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS abstract text NOT NULL DEFAULT '';
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS doi text;
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS keywords text[] NOT NULL DEFAULT '{}';
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS subject text NOT NULL DEFAULT '';
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS pdf_metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS pages integer NOT NULL DEFAULT 0;
 ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS file_size text NOT NULL DEFAULT '';
 ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS file_name text NOT NULL DEFAULT '';

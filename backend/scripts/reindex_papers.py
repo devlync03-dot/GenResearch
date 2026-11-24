@@ -32,6 +32,7 @@ from ingestion.table_extractor import extract_tables  # noqa: E402
 from services.chroma_service import store_chunks, store_structured_chunks  # noqa: E402
 from services.chunker import chunk_text  # noqa: E402
 from services.pdf_extractor import extract_text_from_pdf  # noqa: E402
+from services.pdf_metadata import extract_pdf_metadata  # noqa: E402
 
 
 async def reindex_paper(paper: dict, dry_run: bool) -> str:
@@ -42,6 +43,8 @@ async def reindex_paper(paper: dict, dry_run: bool) -> str:
         return "skipped (PDF file not found on disk)"
 
     file_bytes = Path(path).read_bytes()
+    pdf_metadata = await asyncio.to_thread(extract_pdf_metadata, file_bytes)
+    title = pdf_metadata["title"] or title
     text = await extract_text_from_pdf(file_bytes)
     if not text.strip():
         return "skipped (no extractable text)"
@@ -81,6 +84,14 @@ async def reindex_paper(paper: dict, dry_run: bool) -> str:
     get_supabase().table("papers").update({
         "status": "indexed",
         "chunks": stored,
+        "title": title,
+        "authors": paper.get("authors") or pdf_metadata["authors"],
+        "year": paper.get("year") or pdf_metadata["year"],
+        "abstract": pdf_metadata["abstract"],
+        "doi": pdf_metadata["doi"],
+        "keywords": pdf_metadata["keywords"],
+        "subject": pdf_metadata["subject"],
+        "pdf_metadata": pdf_metadata["pdf_metadata"],
     }).eq("id", paper_id).execute()
     return f"replaced {len(old_ids)} chunks with {stored}"
 

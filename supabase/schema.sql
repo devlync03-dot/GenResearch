@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS public.papers (
   title        text NOT NULL,
   authors      text NOT NULL DEFAULT '',
   year         int,
+  abstract     text NOT NULL DEFAULT '',
+  doi          text,
+  keywords     text[] NOT NULL DEFAULT '{}',
+  subject      text NOT NULL DEFAULT '',
+  pdf_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   pages        int DEFAULT 0,
   file_size    text DEFAULT '',
   file_name    text DEFAULT '',
@@ -66,6 +71,12 @@ CREATE TABLE IF NOT EXISTS public.papers (
   storage_path text DEFAULT '',          -- Supabase Storage / future file path
   created_at   timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS abstract text NOT NULL DEFAULT '';
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS doi text;
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS keywords text[] NOT NULL DEFAULT '{}';
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS subject text NOT NULL DEFAULT '';
+ALTER TABLE public.papers ADD COLUMN IF NOT EXISTS pdf_metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 ALTER TABLE public.papers ENABLE ROW LEVEL SECURITY;
 

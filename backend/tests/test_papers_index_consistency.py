@@ -130,6 +130,20 @@ def test_reindex_marks_recovered_paper_indexed(monkeypatch, tmp_path):
         return len(kwargs["chunks"])
 
     monkeypatch.setattr(reindex_papers, "extract_text_from_pdf", fake_extract_text)
+    monkeypatch.setattr(
+        reindex_papers,
+        "extract_pdf_metadata",
+        lambda _: {
+            "title": "",
+            "authors": "",
+            "year": None,
+            "abstract": "",
+            "doi": None,
+            "keywords": [],
+            "subject": "",
+            "pdf_metadata": {},
+        },
+    )
     monkeypatch.setattr(reindex_papers, "parse_pdf", lambda _: [])
     monkeypatch.setattr(reindex_papers, "extract_tables", lambda _: [])
     monkeypatch.setattr(reindex_papers, "chunk_document", lambda *args: [])
@@ -149,7 +163,18 @@ def test_reindex_marks_recovered_paper_indexed(monkeypatch, tmp_path):
     ))
 
     assert result == "replaced 0 chunks with 1"
-    assert updates == [{"status": "indexed", "chunks": 1}]
+    assert updates == [{
+        "status": "indexed",
+        "chunks": 1,
+        "title": "Paper",
+        "authors": "",
+        "year": None,
+        "abstract": "",
+        "doi": None,
+        "keywords": [],
+        "subject": "",
+        "pdf_metadata": {},
+    }]
 
 
 def test_retry_index_endpoint_reuses_saved_pdf(monkeypatch, tmp_path):
@@ -196,6 +221,20 @@ def test_retry_index_endpoint_reuses_saved_pdf(monkeypatch, tmp_path):
 
     monkeypatch.setattr(papers_router, "get_supabase", lambda: FakeSupabase())
     monkeypatch.setattr(papers_router, "_index_pdf", fake_index_pdf)
+    monkeypatch.setattr(
+        papers_router,
+        "extract_pdf_metadata",
+        lambda _: {
+            "title": "",
+            "authors": "Jane Doe",
+            "year": 2024,
+            "abstract": "Abstract text.",
+            "doi": "10.1234/example",
+            "keywords": ["research"],
+            "subject": "Research",
+            "pdf_metadata": {"creator": "Test"},
+        },
+    )
 
     app = FastAPI()
     app.include_router(papers_router.router)
@@ -210,5 +249,82 @@ def test_retry_index_endpoint_reuses_saved_pdf(monkeypatch, tmp_path):
     }
     assert updates == [
         {"status": "processing"},
-        {"status": "indexed", "chunks": 4, "pages": 2},
+        {"status": "indexed", "chunks": 4, "pages": 2, "title": "Paper", "authors": "Jane Doe", "year": 2024, "abstract": "Abstract text.", "doi": "10.1234/example", "keywords": ["research"], "subject": "Research", "pdf_metadata": {"creator": "Test"}},
     ]
+
+
+def test_upload_stores_extracted_pdf_metadata(monkeypatch):
+    inserted = []
+    updated = []
+
+    class Query:
+        operation = "select"
+        payload = None
+
+        def select(self, *_):
+            self.operation = "select"
+            return self
+
+        def insert(self, payload):
+            self.operation = "insert"
+            self.payload = payload
+            return self
+
+        def update(self, payload):
+            self.operation = "update"
+            self.payload = payload
+            return self
+
+        def eq(self, *_):
+            return self
+
+        def execute(self):
+            if self.operation == "insert":
+                inserted.append(self.payload)
+            elif self.operation == "update":
+                updated.append(self.payload)
+            return type("Response", (), {"data": []})()
+
+    class FakeSupabase:
+        def table(self, _):
+            return Query()
+
+    metadata = {
+        "title": "Extracted Research Title",
+        "authors": "Jane Doe and John Smith",
+        "year": 2024,
+        "abstract": "A concise paper abstract.",
+        "doi": "10.1234/example.paper",
+        "keywords": ["metadata", "indexing"],
+        "subject": "PDF indexing",
+        "pdf_metadata": {"creator": "Test Publisher"},
+    }
+
+    async def fake_index_pdf(*_args):
+        return 2, 5
+
+    monkeypatch.setattr(papers_router, "get_supabase", lambda: FakeSupabase())
+    monkeypatch.setattr(papers_router, "extract_pdf_metadata", lambda _: metadata)
+    monkeypatch.setattr(papers_router, "_save_pdf_file", lambda *_args: "/tmp/test-paper.pdf")
+    monkeypatch.setattr(papers_router, "_index_pdf", fake_index_pdf)
+    monkeypatch.setattr(papers_router.settings, "DOC_STRUCTURE_ON_UPLOAD", False)
+
+    app = FastAPI()
+    app.include_router(papers_router.router)
+    response = TestClient(app).post(
+        "/papers/upload",
+        data={"user_id": "user-1", "collection": "Library", "title": "upload-name"},
+        files={"file": ("paper.pdf", b"%PDF test", "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Extracted Research Title"
+    assert inserted[0]["title"] == "Extracted Research Title"
+    assert inserted[0]["authors"] == "Jane Doe and John Smith"
+    assert inserted[0]["year"] == 2024
+    assert inserted[0]["abstract"] == "A concise paper abstract."
+    assert inserted[0]["doi"] == "10.1234/example.paper"
+    assert inserted[0]["keywords"] == ["metadata", "indexing"]
+    assert inserted[0]["subject"] == "PDF indexing"
+    assert inserted[0]["pdf_metadata"] == {"creator": "Test Publisher"}
+    assert updated[0]["status"] == "indexed"
